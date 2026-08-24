@@ -1,0 +1,17 @@
+# 酷狗 dsp.dll 音效引擎 Rust 调用器
+# 目标平台: i686-pc-windows-msvc (dsp.dll 为 32 位 x86)
+
+[package]
+name = "kugou-dsp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kugou-dsp"
+path = "src/main.rs"
+
+[dependencies]
+hound = "3.5"        # 纯 Rust WAV 读写
+
+[profile.release]
+opt-level = 2
