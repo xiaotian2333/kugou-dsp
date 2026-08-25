@@ -10,6 +10,7 @@
 //!
 //! 通用选项: --dll-dir PATH (默认仅搜索 exe 同目录的 dll\ 子目录)
 
+mod apo;
 mod engine;
 mod ffi;
 mod offline;
@@ -39,8 +40,36 @@ fn main() {
     }
     let dll_dir = dll_dir.unwrap_or_else(default_dll_dir);
 
+    // 提权子进程带 --elevated 标记时隐藏控制台窗口
+    if args.iter().any(|a| a == "--elevated") {
+        hide_console();
+    }
+
+    // apo 子命令与 gui 不需要 dll
+    match pos[0].as_str() {
+        c if c.starts_with("apo-") => std::process::exit(apo::run(c, &pos[1..])),
+        "devices" => std::process::exit(apo::device::cmd_list_devices()),
+        "gui" => std::process::exit(apo::gui::run_gui()),
+        _ => {}
+    }
+
     let code = run(&pos, &dll_dir);
     std::process::exit(code);
+}
+
+/// 隐藏提权子进程的控制台黑框
+fn hide_console() {
+    #[link(name = "kernel32")]
+    extern "system" { fn GetConsoleWindow() -> *mut std::ffi::c_void; }
+    #[link(name = "user32")]
+    extern "system" { fn ShowWindow(h: *mut std::ffi::c_void, cmd: i32) -> i32; }
+    unsafe {
+        let h = GetConsoleWindow();
+        if !h.is_null() {
+            const SW_HIDE: i32 = 0;
+            ShowWindow(h, SW_HIDE);
+        }
+    }
 }
 
 fn default_dll_dir() -> PathBuf {
@@ -59,6 +88,13 @@ fn print_usage() {
         "用法:\n\
          kugou-dsp info [--dll-dir DIR]\n\
          kugou-dsp wav <in.wav> <out.wav> --preset <ID> [--keep-tail] [--dll-dir DIR]\n\
+         \n\
+         全局音效 (复用酷狗 kgapo64):\n\
+         kugou-dsp gui                          控制窗口\n\
+         kugou-dsp apo-install [--device GUID] [--from DIR]  安装(UAC)\n\
+         kugou-dsp apo-uninstall [--device GUID]             卸载还原\n\
+         kugou-dsp apo-on / apo-off / apo-status             开关与状态\n\
+         kugou-dsp devices                                   列出渲染设备\n\
          \n\
          --keep-tail  保留结尾混响拖尾（输出比输入略长；默认与输入等长）\n\
          可用预设 ID: {}",

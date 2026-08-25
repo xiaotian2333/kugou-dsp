@@ -15,13 +15,21 @@ rust/
 ├── dll/                 # 依赖模块副本(开发用)
 ├── dist/                # 独立发行目录
 │   ├── kugou-dsp.exe    # 主程序 (32 位)
+│   ├── KGApo/           # ★ 全局音效三件套 (酷狗原版)
 │   └── dll/             # ★ dsp/infra/logging/MSVC CRT 全部在此子目录
 └── src/
-    ├── main.rs          # CLI 入口 (info / wav)
+    ├── main.rs          # CLI 入口 (info / wav / apo-* / devices / gui)
     ├── presets.rs       # 预设 ID 总表 + CLI 白名单
     ├── ffi.rs           # dsp.dll 符号动态解析 + 签名定义
     ├── engine.rs        # 引擎会话封装 (LoadPreset 路线)
-    └── offline.rs       # WAV -> 预设 -> WAV 离线管线
+    ├── offline.rs       # WAV -> 预设 -> WAV 离线管线
+    └── apo/             # 电脑全局音效模块（复用酷狗 kgapo64）
+        ├── mod.rs       #   常量与子命令分发
+        ├── reg.rs       #   注册表 FFI（KEY_WOW64_64KEY）
+        ├── device.rs    #   渲染设备枚举（COM/IMMDevice）
+        ├── install.rs   #   安装/卸载（CLSID + FxProperties + 备份还原）
+        ├── toggle.rs    #   开关（配置文件 + 全局事件）
+        └── gui.rs       #   Win32 原生控制窗口
 ```
 
 ## 使用
@@ -44,6 +52,50 @@ cd A:\KuGou\rust
 
 `--dll-dir` 默认**仅搜索 exe 同目录的 `dll\` 子目录**（不回退其他路径），
 找不到 `dsp.dll` 时会直接报错；DLL 放在其他位置时必须显式传参。
+
+## 电脑全局音效（复用酷狗 kgapo64）
+
+将**整机所有声音**实时套上酷狗音效。效果本体为酷狗原版
+`kgapo64.dll`（EqualizerAPO 改版 + 内嵌 ViPER 引擎），本工具仅做
+安装与开关控制，不含任何自研 DSP。
+
+### 快速开始（GUI）
+
+```pwsh
+.\dist\kugou-dsp.exe gui
+```
+
+窗口内选择目标设备 → 点「安装全局音效」→ UAC 确认 → 点「开启音效」。
+注册一次后**开机自动生效**，无需本工具驻留。
+
+### 命令行等价操作
+
+```pwsh
+.\dist\kugou-dsp.exe devices            # 列出渲染设备（* 为默认）
+.\dist\kugou-dsp.exe apo-install        # 安装到默认设备（UAC 提权）
+.\dist\kugou-dsp.exe apo-install --device {b5287108-...}   # 指定设备
+.\dist\kugou-dsp.exe apo-on             # 开启（写配置+触发全局事件）
+.\dist\kugou-dsp.exe apo-off            # 关闭
+.\dist\kugou-dsp.exe apo-status         # 查看状态
+.\dist\kugou-dsp.exe apo-uninstall      # 卸载并还原端点原状
+```
+
+### 工作原理（逆向结论）
+
+```
+安装: 部署三件套 → C:\ProgramData\Kugou\KGApo\v1.0\
+      注册 COM: HKLM\...\CLSID\{B19D744D-...} "KuGouAPO Class" → kgapo64.dll
+      端点 FxProperties {d04e05a6-...},2 = CLSID（原值备份 SOFTWARE\Kugou\BackupAPOs_kugoudsp）
+运行: audiodg.exe 加载 kgapo64 → 监听 Global\kugou_apo_config_changed_event
+开关: %ProgramData%\Kugou\kugou_apo_config_file 写单字节 01/00 + SetEvent
+```
+
+### 注意事项
+
+1. 安装需要管理员权限（写入 MMDevices 注册表）；开启/关闭不需要
+2. 效果种类与酷狗官方一致（其引擎参数硬编码，官方 UI 同样只开放一种）
+3. 卸载会按备份键还原端点；若声音异常可 `net stop audiosrv && net start audiosrv` 或重启电脑
+4. APO 由 Windows 音频引擎加载，崩溃会影响系统声音——异常时先执行卸载还原
 
 ## 全部音效预设总表
 
