@@ -58,14 +58,15 @@ fn print_usage() {
     println!(
         "用法:\n\
          kugou-dsp info [--dll-dir DIR]\n\
-         kugou-dsp wav <in.wav> <out.wav> --preset <ID> [--dll-dir DIR]\n\
+         kugou-dsp wav <in.wav> <out.wav> --preset <ID> [--keep-tail] [--dll-dir DIR]\n\
          \n\
+         --keep-tail  保留结尾混响拖尾（输出比输入略长；默认与输入等长）\n\
          可用预设 ID: {}",
         presets::allowed_list_text()
     );
 }
 
-fn run(pos: &[String], dll_dir: &PathBuf) -> i32 {
+fn run(pos: &[String], dll_dir: &std::path::Path) -> i32 {
     match pos[0].as_str() {
         "info" => cmd_info(dll_dir),
         "wav" => {
@@ -83,7 +84,7 @@ fn run(pos: &[String], dll_dir: &PathBuf) -> i32 {
     }
 }
 
-fn cmd_info(dll_dir: &PathBuf) -> i32 {
+fn cmd_info(dll_dir: &std::path::Path) -> i32 {
     println!("DLL 目录: {}", dll_dir.display());
     unsafe {
         match engine::DspEngine::new(dll_dir) {
@@ -111,9 +112,10 @@ fn cmd_info(dll_dir: &PathBuf) -> i32 {
     }
 }
 
-fn cmd_wav(pos: &[String], dll_dir: &PathBuf) -> i32 {
-    // wav IN OUT --preset ID
+fn cmd_wav(pos: &[String], dll_dir: &std::path::Path) -> i32 {
+    // wav IN OUT --preset ID [--keep-tail]
     let mut preset: Option<i32> = None;
+    let mut keep_tail = false;
     let mut i = 3;
     while i < pos.len() {
         match pos[i].as_str() {
@@ -126,6 +128,10 @@ fn cmd_wav(pos: &[String], dll_dir: &PathBuf) -> i32 {
                     }
                 }
                 i += 2;
+            }
+            "--keep-tail" => {
+                keep_tail = true;
+                i += 1;
             }
             other => {
                 eprintln!("未知参数 {other}");
@@ -174,7 +180,7 @@ fn cmd_wav(pos: &[String], dll_dir: &PathBuf) -> i32 {
             }
         };
         println!("音效预设 [{pname}] (id={preset}) 处理中...");
-        match offline::process_wav(&engine, &input, preset) {
+        match offline::process_wav(&engine, &input, preset, keep_tail) {
             Ok(outdata) => match offline::write_wav(&pos[2], &outdata) {
                 Ok(_) => {
                     println!("[完成] {}", pos[2]);

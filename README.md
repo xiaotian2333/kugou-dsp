@@ -37,6 +37,9 @@ cd A:\KuGou\rust
 .\dist\kugou-dsp.exe wav test_in.wav out_bass.wav --preset 2
 .\dist\kugou-dsp.exe wav test_in.wav out_vocal.wav --preset 3
 .\dist\kugou-dsp.exe wav test_in.wav out_hifi.wav --preset 4
+
+# 保留结尾混响拖尾（输出比输入略长）
+.\dist\kugou-dsp.exe wav test_in.wav out_tail.wav --preset 3 --keep-tail
 ```
 
 `--dll-dir` 默认**仅搜索 exe 同目录的 `dll\` 子目录**（不回退其他路径），
@@ -151,11 +154,17 @@ int Process(
 1. **必须 32 位进程**：构建目标锁定 i686-pc-windows-msvc
 2. **帧大小敏感**：引擎内部缓冲按小帧设计，管线使用 512 帧/块；
    大块(4096+)会触发内部越界
-3. **增益与软限幅**：效果链默认增益约 4x（LoadPreset(-1) 重置值
-   4.0/0.25/1.0/3.0），管线输出端以 tanh 软限幅保护
+3. **增益与限幅**：效果链自带内部增益（LoadPreset(-1) 重置值
+   4.0/0.25/1.0/3.0）与限幅组件，输入输出均为线性 int16 量化，
+   管线不做任何额外软限幅（客户端同源行为）
 4. **单次运行型内存策略**：C++ 对象随进程退出回收，不做释放
    （规避跨 CRT 释放问题）；长驻进程集成需自行补 Release/Dtor 调用
 5. **声道数**：预设链按立体声设计验证，单声道输入行为未保证
+6. **引擎延迟模型**：Process 为「推入-处理-拉回」结构（dsp.dll
+   VA 0x10021430），预热期 written=0 且输入在内部 FIFO 积压，
+   稳态后以恒定延迟（512 帧/块时约 9 块 ≈100ms@44.1k）流出，
+   无数据丢失；默认输出与输入等长，`--keep-tail` 排空 FIFO
+   保留完整混响尾
 
 ## 构建
 

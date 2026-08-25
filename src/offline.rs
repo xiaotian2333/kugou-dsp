@@ -91,17 +91,24 @@ type FnProcess = unsafe extern "system" fn(
     p11: usize,
 ) -> c_int;
 
-/// f32 [-1,1] -> int16（软限幅后量化）
+/// f32 [-1,1] -> int16：线性量化
+///
+/// 与酷狗客户端一致（dsp.dll 内部 ConvertI16ToF32 为线性换算），
+/// 不做任何软限幅/预失真——tanh 会压缩峰值引入谐波失真，导致音色偏差
 fn f32_to_i16(x: f32) -> i16 {
-    let c = x.tanh().clamp(-1.0, 1.0);
-    (c * 32767.0) as i16
+    (x.clamp(-1.0, 1.0) * 32767.0) as i16
 }
 
 /// 执行离线处理：对输入施加 `preset_id` 对应的酷狗音效预设
+///
+/// `keep_tail`: false 时输出与输入严格等长（等效客户端播完即停，
+/// 引擎固有的约 100ms 延迟使结尾少量直达声被截断，混响尾不保留）；
+/// true 时额外排空内部 FIFO，保留完整混响拖尾（输出略长于输入）。
 pub unsafe fn process_wav(
     engine: &DspEngine,
     input: &WavData,
     preset_id: i32,
+    keep_tail: bool,
 ) -> Result<WavData, String> {
     let chans = input.channels.max(1) as usize;
     if chans != 2 {
@@ -171,10 +178,18 @@ pub unsafe fn process_wav(
         offset_frame += frames;
     }
 
-    // 尾部排空: 继续喂静音块，挤出 FIFO 内残余数据（线性淡出防爆音）
+    // 尾部排空: 继续喂静音块，挤出 FIFO 内残余数据
+    //
+    // 引擎为「延迟线」模型：预热期输入积压在内部 FIFO，稳态后以恒定延迟流出；
+    // 排空阶段的输出是真实音频（歌曲开头被延迟的内容 + 结尾混响拖尾），
+    // 必须原样收集，禁止淡出（淡出会造成与客户端实际听感不一致）。
+    // 自适应终止：连续 8 块无输出或全静音即认为排空完毕，上限 64 块。
     let silence_i16 = vec![0i16; chunk_frames * chans];
-    let tail_blocks = 16usize;
-    for b in 0..tail_blocks {
+    let max_tail_blocks = 64usize;
+    let quiet_limit = 8usize;
+    let mut quiet_run = 0usize;
+    let mut b = 0usize;
+    while b < max_tail_blocks && quiet_run < quiet_limit {
         let mut written: u32 = 0;
         let r = process(
             es as *mut std::ffi::c_void,
@@ -194,11 +209,29 @@ pub unsafe fn process_wav(
             break;
         }
         let usable = ((written as usize / 2).min(silence_i16.len())) / chans * chans;
-        for (i, &v) in silence_i16[..usable].iter().enumerate() {
-            let pos = b * chunk_frames + i / chans;
-            let fade = 1.0 - pos as f32 / (tail_blocks * chunk_frames) as f32;
-            out.push((v as f32 / 32768.0) * fade.clamp(0.0, 1.0));
+        if usable == 0 {
+            quiet_run += 1;
+            b += 1;
+            continue;
         }
+        let mut block_peak: f32 = 0.0;
+        for &v in &silence_i16[..usable] {
+            let f = v as f32 / 32768.0;
+            block_peak = block_peak.max(f.abs());
+            out.push(f);
+        }
+        // 内容已衰减到 16bit 量化底噪以下视为静音块
+        if block_peak < 1.0 / 32768.0 {
+            quiet_run += 1;
+        } else {
+            quiet_run = 0;
+        }
+        b += 1;
+    }
+
+    // 默认裁剪到输入等长：与参考项目实际播放效果对齐
+    if !keep_tail {
+        out.truncate(total_frames * chans);
     }
 
     Ok(WavData {
